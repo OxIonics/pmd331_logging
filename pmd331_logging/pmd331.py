@@ -33,12 +33,12 @@ class DetectedData(dict):
                     raise KeyError
             mapping.update(kwargs)
         super().__init__(mapping)
-    
+
     def __setitem__(self, key, value):
         if key not in self.allowed_keys:
             raise KeyError
         super().__setitem__(key, value)
-    
+
     def __add__(self, other):
         temp = DetectedData()
         for k in self.allowed_keys:
@@ -53,24 +53,38 @@ class DetectedData(dict):
             if self[k] != other[k]:
                 return False
         return True
-    
+
     def __ne__(self, other):
         return not (self == other)
-    
+
     def __repr__(self):
         return '{{{}}}'.format(', '.join([f"'{k}': {self[k]}" for k in self.allowed_keys]))
+
 
 class PMD331:
     flow_rate_Lpm = 2.83 # flow rate in liters per minute
     flow_rate_cfm = 2.83 * 0.03531467 # flow rate in cubic feet per minute
 
     '''Class provides raw access to PMD331 functions'''
-    def __init__(self, port):
+    def __init__(self, host, port):
+        self.host = host
         self.port = port
         self.client = None
 
     async def startup(self):
         '''Initialize serial connection'''
+
+        # self.client = ModbusClient.AsyncModbusTcpClient(
+        #     self.host,
+        #     self.port,
+        #     framer=pymodbus.framer.ModbusRtuFramer,
+        #     # framer=pymodbus.framer.ModbusSocketFramer,
+        #     baudrate=115200,
+        #     bytesize=8,
+        #     parity='N',
+        #     stopbits=1
+        # )
+
         self.client = ModbusClient.AsyncModbusSerialClient(
             self.port,
             framer=pymodbus.framer.ModbusRtuFramer,
@@ -79,16 +93,17 @@ class PMD331:
             parity='N',
             stopbits=1
         )
+
         # this connect call connects the application to the host's device port, not
         # the pmd331
         await self.client.connect()
         assert self.client.connected
-    
+
     @property
     async def started(self):
         '''Has startup() been called'''
         return self.client is not None and self.client.connected
-    
+
     async def start_detection(self):
         '''Start detection'''
         await self.client.write_register(address=0x06, value=0x01, slave=0xFE)
@@ -110,7 +125,7 @@ class PMD331:
         dd['PC10']  = ((rr.registers[12] << 8) | rr.registers[13])
 
         return dd
-    
+
     async def set_clock(self, t: datetime):
         await self.client.write_registers(address=0x64,
             values=[t.year & 0xffff, t.month & 0xffff, t.day & 0xffff,
@@ -147,7 +162,7 @@ class Sample:
         self._sample_group = sample_group
         self._dd = dd
         self._timestamp = timestamp
-    
+
     @property
     def sample_group(self) -> int:
         return self._sample_group
@@ -155,7 +170,7 @@ class Sample:
     @property
     def timestamp(self) -> datetime:
         return self._timestamp
-    
+
     @property
     def data(self) -> DetectedData:
         return self._dd
@@ -245,7 +260,7 @@ class Sampler:
                         last_dd = dd.copy()
 
                     _logger.debug(f'    {t-_} {dd}')
-                    
+
                     if _ > 0:  # throw away the first sample it's always all zeroes
                         fast_samples.append(Sample(sample_group, dd, begin_date + timedelta(seconds=elapsed_total)))
 
@@ -257,7 +272,7 @@ class Sampler:
                         return
 
                 await self._samples.put(fast_samples)
-        
+
         self._sample_task = asyncio.create_task(sample_task(self.pmd331, self.sample_units, self.sample_time))
 
     async def end(self):
@@ -272,7 +287,7 @@ class Sampler:
 
     async def read(self) -> list[Sample]:
         '''Returns results of one sample interval, blocks if none are available
-        
+
         Note: Only returns N-1 samples (where N is the sample time). The final sample,
         which is written to the device's log data store, is not available over the RS232
         interface. Since each entry in the array is cumulative, use the last sample in this
@@ -283,4 +298,3 @@ class Sampler:
           s[-1].data  # access the data for the N-1 sample
         '''
         return await self._samples.get()
-
